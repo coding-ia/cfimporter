@@ -59,6 +59,7 @@ func createImportTemplate(ctx context.Context) {
 
 		if identity != nil {
 			importIdentities = append(importIdentities, identity)
+			resource.DeletionPolicy = "Retain"
 			resources[resourceName] = resource
 		}
 	}
@@ -139,7 +140,7 @@ func parseInstanceProfile(ctx context.Context, resource Resource, resourceName s
 	} else if s, ok := val.(string); ok {
 		profileName = s
 	}
-	
+
 	name, err := aws_iam.GetIAMInstanceProfileName(ctx, profileName)
 	if err != nil {
 		log.Fatal(err)

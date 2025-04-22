@@ -1,8 +1,9 @@
 package cmd
 
 type Resource struct {
-	Type       string                 `yaml:"Type"`
-	Properties map[string]interface{} `yaml:"Properties"`
+	Type           string                 `yaml:"Type"`
+	DeletionPolicy string                 `yaml:"DeletionPolicy"`
+	Properties     map[string]interface{} `yaml:"Properties"`
 }
 
 type CloudFormationTemplate struct {
