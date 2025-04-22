@@ -131,8 +131,7 @@ func parseIAMPolicy(ctx context.Context, resource Resource, resourceName string)
 }
 
 func parseInstanceProfile(ctx context.Context, resource Resource, resourceName string) *ImportResource {
-	val := resource.Properties["InstanceProfileName"].(map[string]any)
-	profileName := val["Ref"].(string)
+	profileName := resource.Properties["InstanceProfileName"].(string)
 	name, err := aws_iam.GetIAMInstanceProfileName(ctx, profileName)
 	if err != nil {
 		log.Fatal(err)
