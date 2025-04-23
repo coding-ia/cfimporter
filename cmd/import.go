@@ -54,7 +54,6 @@ func createImportTemplate(ctx context.Context) {
 			identity = parseIAMRole(ctx, resource, resourceName)
 		}
 		if resource.Type == "AWS::IAM::InstanceProfile" {
-			fmt.Println("IAM Instance Profile")
 			identity = parseInstanceProfile(ctx, resource, resourceName)
 		}
 
@@ -142,6 +141,7 @@ func parseInstanceProfile(ctx context.Context, resource Resource, resourceName s
 		profileName = s
 	}
 
+	fmt.Printf("Trying to find instance profile name: %s\n", profileName)
 	name, err := aws_iam.GetIAMInstanceProfileName(ctx, profileName)
 	if err != nil {
 		log.Fatal(err)
