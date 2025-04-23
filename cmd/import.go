@@ -54,7 +54,7 @@ func createImportTemplate(ctx context.Context) {
 			identity = parseIAMRole(ctx, resource, resourceName)
 		}
 		if resource.Type == "AWS::IAM::InstanceProfile" {
-			identity = parseInstanceProfile(ctx, resource, resourceName)
+			identity = parseInstanceProfile(ctx, resource, resourceName, template.Resources)
 		}
 
 		if identity != nil {
@@ -131,7 +131,7 @@ func parseIAMPolicy(ctx context.Context, resource Resource, resourceName string)
 	}
 }
 
-func parseInstanceProfile(ctx context.Context, resource Resource, resourceName string) *ImportResource {
+func parseInstanceProfile(ctx context.Context, resource Resource, resourceName string, resources map[string]Resource) *ImportResource {
 	val := resource.Properties["InstanceProfileName"]
 	var profileName string
 
@@ -141,8 +141,9 @@ func parseInstanceProfile(ctx context.Context, resource Resource, resourceName s
 		profileName = s
 	}
 
-	fmt.Printf("Trying to find instance profile name: %s\n", profileName)
-	name, err := aws_iam.GetIAMInstanceProfileName(ctx, profileName)
+	role := resources[profileName]
+	roleName := role.Properties["RoleName"].(string)
+	name, err := aws_iam.GetIAMInstanceProfileName(ctx, roleName)
 	if err != nil {
 		log.Fatal(err)
 	}
