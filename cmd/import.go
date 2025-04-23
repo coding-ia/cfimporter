@@ -148,7 +148,7 @@ func parseInstanceProfile(ctx context.Context, resource Resource, resourceName s
 	if name == nil {
 		return nil
 	}
-	fmt.Printf("Instance profile name: %s\n", *name)
+	log.Printf("Instance profile name: %s\n", *name)
 
 	return &ImportResource{
 		ResourceType:      resource.Type,
