@@ -142,6 +142,7 @@ func parseInstanceProfile(ctx context.Context, resource Resource, resourceName s
 		profileName = s
 	}
 
+	fmt.Printf("Trying to find rolename for : %s\n", profileName)
 	role := resources[profileName]
 	roleName := role.Properties["RoleName"].(string)
 	name, err := aws_iam.GetIAMInstanceProfileName(ctx, roleName)
