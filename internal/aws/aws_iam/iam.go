@@ -4,27 +4,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/iam/types"
 )
 
-func createClient(ctx context.Context) *iam.Client {
-	cfg, err := config.LoadDefaultConfig(ctx)
-	if err != nil {
-		log.Fatalf("unable to load AWS SDK config, %v", err)
-	}
+type AWSClient struct {
+	Config aws.Config
+}
 
+func createIAMClient(_ context.Context, cfg aws.Config) *iam.Client {
 	iamClient := iam.NewFromConfig(cfg)
 	return iamClient
 }
 
-func GetIAMRoleName(ctx context.Context, roleName string) (*string, error) {
-	client := createClient(ctx)
+func (awsClient *AWSClient) GetIAMRoleName(ctx context.Context, roleName string) (*string, error) {
+	client := createIAMClient(ctx, awsClient.Config)
 	output, err := client.GetRole(ctx, &iam.GetRoleInput{
 		RoleName: aws.String(roleName),
 	})
@@ -39,8 +36,8 @@ func GetIAMRoleName(ctx context.Context, roleName string) (*string, error) {
 	return output.Role.RoleName, nil
 }
 
-func GetIAMInstanceProfileName(ctx context.Context, profileName string) (*string, error) {
-	client := createClient(ctx)
+func (awsClient *AWSClient) GetIAMInstanceProfileName(ctx context.Context, profileName string) (*string, error) {
+	client := createIAMClient(ctx, awsClient.Config)
 	output, err := client.GetInstanceProfile(ctx, &iam.GetInstanceProfileInput{
 		InstanceProfileName: aws.String(profileName),
 	})
@@ -55,8 +52,8 @@ func GetIAMInstanceProfileName(ctx context.Context, profileName string) (*string
 	return output.InstanceProfile.InstanceProfileName, nil
 }
 
-func FindPolicyArnByName(ctx context.Context, policyName string) (*string, error) {
-	client := createClient(ctx)
+func (awsClient *AWSClient) FindPolicyArnByName(ctx context.Context, policyName string) (*string, error) {
+	client := createIAMClient(ctx, awsClient.Config)
 	var marker *string
 
 	for {

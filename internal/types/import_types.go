@@ -1,4 +1,4 @@
-package cmd
+package types
 
 type Resource struct {
 	Type           string                 `yaml:"Type"`
