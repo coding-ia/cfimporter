@@ -4,18 +4,14 @@ import (
 	"cfimporter/internal/aws/aws_iam"
 	"cfimporter/internal/types"
 	"context"
-	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	cftypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"gopkg.in/yaml.v3"
-	"time"
 )
 
 type CFImport struct {
-	Account  *string
-	RoleName *string
+	Config *aws.Config
 }
 
 func (cfi *CFImport) ParseCloudFormationImportTemplate(ctx context.Context, data []byte) ([]byte, []cftypes.ResourceToImport, error) {
@@ -69,14 +65,10 @@ func createIAMParserClient(ctx context.Context, cfi *CFImport) (*IAMParser, erro
 		return nil, err
 	}
 
-	if cfi.RoleName != nil && *cfi.RoleName != "" {
-		cfg, err := assumeRole(ctx, baseCfg, aws.ToString(cfi.Account), aws.ToString(cfi.RoleName))
-		if err != nil {
-			return nil, err
-		}
+	if cfi.Config != nil {
 		return &IAMParser{
 			IAMClient: &aws_iam.AWSClient{
-				Config: cfg,
+				Config: *cfi.Config,
 			},
 		}, nil
 	}
@@ -86,37 +78,4 @@ func createIAMParserClient(ctx context.Context, cfi *CFImport) (*IAMParser, erro
 			Config: baseCfg,
 		},
 	}, nil
-}
-
-func assumeRole(ctx context.Context, baseCfg aws.Config, accountID, roleName string) (aws.Config, error) {
-	stsClient := sts.NewFromConfig(baseCfg)
-
-	roleArn := fmt.Sprintf("arn:aws:iam::%s:role/%s", accountID, roleName)
-
-	out, err := stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
-		RoleArn:         aws.String(roleArn),
-		RoleSessionName: aws.String(fmt.Sprintf("stack-importer-%d", time.Now().Unix())),
-		DurationSeconds: aws.Int32(3600),
-	})
-	if err != nil {
-		return aws.Config{}, fmt.Errorf("assume role into %s failed: %w", accountID, err)
-	}
-
-	creds := aws.Credentials{
-		AccessKeyID:     aws.ToString(out.Credentials.AccessKeyId),
-		SecretAccessKey: aws.ToString(out.Credentials.SecretAccessKey),
-		SessionToken:    aws.ToString(out.Credentials.SessionToken),
-		Source:          "AssumeRole",
-		CanExpire:       true,
-		Expires:         aws.ToTime(out.Credentials.Expiration),
-	}
-
-	assumedCfg := baseCfg.Copy()
-	assumedCfg.Credentials = aws.NewCredentialsCache(
-		aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
-			return creds, nil
-		}),
-	)
-
-	return assumedCfg, nil
 }

@@ -57,5 +57,5 @@ func createImportTemplate(ctx context.Context) {
 		log.Fatal(err)
 	}
 
-	fmt.Println("Import template successfully created")
+	fmt.Println("Import templates successfully created")
 }

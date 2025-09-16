@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
 	cftypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/spf13/cobra"
 	"log"
 	"strings"
@@ -23,8 +24,8 @@ type FixStackSetOptions struct {
 var fixStackSetOptions = &FixStackSetOptions{}
 
 var fixStackSetCmd = &cobra.Command{
-	Use:   "fix-stack-set",
-	Short: "Fixes a stack set",
+	Use:   "fix-stackset-stack-instances",
+	Short: "Fixes a stack set stack instances",
 	Run: func(cmd *cobra.Command, args []string) {
 		fixStackSet(cmd.Context())
 	},
@@ -72,11 +73,16 @@ func parseFailedStackSetInstances(ctx context.Context, stackSetName string, role
 
 		for _, instance := range out.Summaries {
 			if instance.StackInstanceStatus.DetailedStatus == cftypes.StackInstanceDetailedStatusFailed {
+				assumedCfg, err := assumeRole(ctx, cfg, aws.ToString(instance.Region), aws.ToString(instance.Account), roleName)
+				if err != nil {
+					log.Fatal(err)
+				}
+				assumedCfn := cloudformation.NewFromConfig(assumedCfg)
+
 				data := []byte(template)
 
 				cfi := &template_parser.CFImport{
-					Account:  instance.Account,
-					RoleName: aws.String(roleName),
+					Config: &assumedCfg,
 				}
 
 				importTemplate, resourcesToImport, err := cfi.ParseCloudFormationImportTemplate(ctx, data)
@@ -85,12 +91,12 @@ func parseFailedStackSetInstances(ctx context.Context, stackSetName string, role
 				}
 
 				stackName := extractStackName(*instance.StackId)
-				err = importStack(ctx, cfn, stackName, "ImportChangeSet", string(importTemplate), resourcesToImport)
+				err = importStack(ctx, assumedCfn, stackName, "ImportChangeSet", string(importTemplate), resourcesToImport)
 				if err != nil {
 					log.Fatal(err)
 				}
 
-				err = waitForImport(ctx, cfn, stackName)
+				err = waitForImport(ctx, assumedCfn, stackName)
 				if err != nil {
 					log.Fatal(err)
 				}
@@ -100,7 +106,7 @@ func parseFailedStackSetInstances(ctx context.Context, stackSetName string, role
 					log.Fatal(err)
 				}
 
-				fmt.Println("Stack Instance Failed")
+				fmt.Println("Stack instance successfully imported")
 			}
 		}
 
@@ -205,4 +211,38 @@ func waitForImport(ctx context.Context, cfn *cloudformation.Client, stackName st
 	}
 
 	return nil
+}
+
+func assumeRole(ctx context.Context, baseCfg aws.Config, region, accountID, roleName string) (aws.Config, error) {
+	baseCfg.Region = region
+	stsClient := sts.NewFromConfig(baseCfg)
+
+	roleArn := fmt.Sprintf("arn:aws:iam::%s:role/%s", accountID, roleName)
+
+	out, err := stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
+		RoleArn:         aws.String(roleArn),
+		RoleSessionName: aws.String(fmt.Sprintf("stack-importer-%d", time.Now().Unix())),
+		DurationSeconds: aws.Int32(3600),
+	})
+	if err != nil {
+		return aws.Config{}, fmt.Errorf("assume role into %s failed: %w", accountID, err)
+	}
+
+	creds := aws.Credentials{
+		AccessKeyID:     aws.ToString(out.Credentials.AccessKeyId),
+		SecretAccessKey: aws.ToString(out.Credentials.SecretAccessKey),
+		SessionToken:    aws.ToString(out.Credentials.SessionToken),
+		Source:          "AssumeRole",
+		CanExpire:       true,
+		Expires:         aws.ToTime(out.Credentials.Expiration),
+	}
+
+	assumedCfg := baseCfg.Copy()
+	assumedCfg.Credentials = aws.NewCredentialsCache(
+		aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
+			return creds, nil
+		}),
+	)
+
+	return assumedCfg, nil
 }
