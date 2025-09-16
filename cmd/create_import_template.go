@@ -3,6 +3,7 @@ package cmd
 import (
 	"cfimporter/internal/template_parser"
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/spf13/cobra"
 	"log"
@@ -37,13 +38,17 @@ func createImportTemplate(ctx context.Context) {
 
 	cfi := &template_parser.CFImport{}
 
-	output, yamlData, err := cfi.ParseCloudFormationImportTemplate(ctx, data)
+	yamlData, importResources, err := cfi.ParseCloudFormationImportTemplate(ctx, data)
 	if err != nil {
 		log.Fatal(err)
 		return
 	}
 
 	err = os.WriteFile("cloudformation_template.yaml", yamlData, 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+	output, err := json.Marshal(importResources)
 	if err != nil {
 		log.Fatal(err)
 	}

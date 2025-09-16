@@ -4,10 +4,10 @@ import (
 	"cfimporter/internal/aws/aws_iam"
 	"cfimporter/internal/types"
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	cftypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"gopkg.in/yaml.v3"
 	"time"
@@ -18,7 +18,7 @@ type CFImport struct {
 	RoleName *string
 }
 
-func (cfi *CFImport) ParseCloudFormationImportTemplate(ctx context.Context, data []byte) ([]byte, []byte, error) {
+func (cfi *CFImport) ParseCloudFormationImportTemplate(ctx context.Context, data []byte) ([]byte, []cftypes.ResourceToImport, error) {
 	iamParser, err := createIAMParserClient(ctx, cfi)
 	if err != nil {
 		return nil, nil, err
@@ -30,10 +30,10 @@ func (cfi *CFImport) ParseCloudFormationImportTemplate(ctx context.Context, data
 		return nil, nil, err
 	}
 
-	var importIdentities []*types.ImportResource
+	var importIdentities []cftypes.ResourceToImport
 	resources := make(map[string]types.Resource)
 	for resourceName, resource := range template.Resources {
-		var identity *types.ImportResource
+		var identity *cftypes.ResourceToImport
 		if resource.Type == "AWS::IAM::ManagedPolicy" {
 			identity = iamParser.parseIAMPolicy(ctx, resource, resourceName)
 		}
@@ -45,15 +45,10 @@ func (cfi *CFImport) ParseCloudFormationImportTemplate(ctx context.Context, data
 		}
 
 		if identity != nil {
-			importIdentities = append(importIdentities, identity)
+			importIdentities = append(importIdentities, *identity)
 			resource.DeletionPolicy = "Retain"
 			resources[resourceName] = resource
 		}
-	}
-
-	output, err := json.Marshal(importIdentities)
-	if err != nil {
-		return nil, nil, err
 	}
 
 	importTemplate := types.CloudFormationTemplate{
@@ -65,7 +60,7 @@ func (cfi *CFImport) ParseCloudFormationImportTemplate(ctx context.Context, data
 		return nil, nil, err
 	}
 
-	return output, yamlData, nil
+	return yamlData, importIdentities, nil
 }
 
 func createIAMParserClient(ctx context.Context, cfi *CFImport) (*IAMParser, error) {

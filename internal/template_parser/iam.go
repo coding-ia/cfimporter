@@ -5,6 +5,8 @@ import (
 	"cfimporter/internal/types"
 	"context"
 	"fmt"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	cftypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
 	"log"
 )
 
@@ -12,7 +14,7 @@ type IAMParser struct {
 	IAMClient *aws_iam.AWSClient
 }
 
-func (ip *IAMParser) parseIAMRole(ctx context.Context, resource types.Resource, resourceName string) *types.ImportResource {
+func (ip *IAMParser) parseIAMRole(ctx context.Context, resource types.Resource, resourceName string) *cftypes.ResourceToImport {
 	roleName := resource.Properties["RoleName"].(string)
 	name, err := ip.IAMClient.GetIAMRoleName(ctx, roleName)
 	if err != nil {
@@ -24,16 +26,16 @@ func (ip *IAMParser) parseIAMRole(ctx context.Context, resource types.Resource, 
 
 	fmt.Printf("IAM role name: %s\n", *name)
 
-	return &types.ImportResource{
-		ResourceType:      resource.Type,
-		LogicalResourceId: resourceName,
+	return &cftypes.ResourceToImport{
+		ResourceType:      aws.String(resource.Type),
+		LogicalResourceId: aws.String(resourceName),
 		ResourceIdentifier: map[string]string{
 			"RoleName": *name,
 		},
 	}
 }
 
-func (ip *IAMParser) parseIAMPolicy(ctx context.Context, resource types.Resource, resourceName string) *types.ImportResource {
+func (ip *IAMParser) parseIAMPolicy(ctx context.Context, resource types.Resource, resourceName string) *cftypes.ResourceToImport {
 	policyName := resource.Properties["ManagedPolicyName"].(string)
 	arn, err := ip.IAMClient.FindPolicyArnByName(ctx, policyName)
 	if err != nil {
@@ -44,16 +46,16 @@ func (ip *IAMParser) parseIAMPolicy(ctx context.Context, resource types.Resource
 	}
 	fmt.Printf("Policy ARN: %s\n", *arn)
 
-	return &types.ImportResource{
-		ResourceType:      resource.Type,
-		LogicalResourceId: resourceName,
+	return &cftypes.ResourceToImport{
+		ResourceType:      aws.String(resource.Type),
+		LogicalResourceId: aws.String(resourceName),
 		ResourceIdentifier: map[string]string{
 			"PolicyArn": *arn,
 		},
 	}
 }
 
-func (ip *IAMParser) parseInstanceProfile(ctx context.Context, resource types.Resource, resourceName string, resources map[string]types.Resource) *types.ImportResource {
+func (ip *IAMParser) parseInstanceProfile(ctx context.Context, resource types.Resource, resourceName string, resources map[string]types.Resource) *cftypes.ResourceToImport {
 	val := resource.Properties["InstanceProfileName"]
 	var profileName string
 
@@ -74,9 +76,9 @@ func (ip *IAMParser) parseInstanceProfile(ctx context.Context, resource types.Re
 	}
 	fmt.Printf("Instance profile name: %s\n", *name)
 
-	return &types.ImportResource{
-		ResourceType:      resource.Type,
-		LogicalResourceId: resourceName,
+	return &cftypes.ResourceToImport{
+		ResourceType:      aws.String(resource.Type),
+		LogicalResourceId: aws.String(resourceName),
 		ResourceIdentifier: map[string]string{
 			"InstanceProfileName": *name,
 		},
