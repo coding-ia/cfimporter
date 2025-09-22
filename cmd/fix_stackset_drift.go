@@ -16,6 +16,7 @@ import (
 
 type FixStackSetDriftOptions struct {
 	StackSetName string
+	RoleName     string
 }
 
 var fixStackSetDriftOptions = &FixStackSetDriftOptions{}
@@ -32,9 +33,15 @@ func init() {
 	rootCmd.AddCommand(fixStackSetDriftCmd)
 
 	fixStackSetDriftCmd.Flags().StringVar(&fixStackSetDriftOptions.StackSetName, "stack-set-name", "", "StackSet Name")
+	fixStackSetDriftCmd.Flags().StringVar(&fixStackSetDriftOptions.RoleName, "role-name", "", "Role name to assume into each account")
 }
 
 func fixStackSetDrift(ctx context.Context) {
+	if fixStackSetDriftOptions.RoleName == "" {
+		fmt.Println("You must specify --role-name to assume into each account")
+		return
+	}
+
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		log.Fatalf("unable to load AWS SDK config, %v", err)
@@ -42,13 +49,13 @@ func fixStackSetDrift(ctx context.Context) {
 
 	cfn := cloudformation.NewFromConfig(cfg)
 
-	err = driftedStacks(ctx, cfn, fixStackSetDriftOptions.StackSetName)
+	err = driftedStacks(ctx, cfg, cfn, fixStackSetDriftOptions.StackSetName, fixStackSetDriftOptions.RoleName)
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
-func driftedStacks(ctx context.Context, cfn *cloudformation.Client, stackSetName string) error {
+func driftedStacks(ctx context.Context, cfg aws.Config, cfn *cloudformation.Client, stackSetName, roleName string) error {
 	instances, err := cfn.ListStackInstances(ctx, &cloudformation.ListStackInstancesInput{
 		StackSetName: aws.String(stackSetName),
 	})
@@ -58,6 +65,11 @@ func driftedStacks(ctx context.Context, cfn *cloudformation.Client, stackSetName
 
 	for _, instance := range instances.Summaries {
 		if instance.DriftStatus == cftypes.StackDriftStatusDrifted {
+			assumedCfg, err := assumeRole(ctx, cfg, aws.ToString(instance.Region), aws.ToString(instance.Account), roleName)
+			if err != nil {
+				log.Fatal(err)
+			}
+
 			drifts, err := cfn.DescribeStackResourceDrifts(ctx, &cloudformation.DescribeStackResourceDriftsInput{
 				StackName: instance.StackId,
 			})
@@ -67,7 +79,7 @@ func driftedStacks(ctx context.Context, cfn *cloudformation.Client, stackSetName
 
 			for _, d := range drifts.StackResourceDrifts {
 				if d.StackResourceDriftStatus != cftypes.StackResourceDriftStatusInSync {
-					patchDifferences(ctx, d.PhysicalResourceId, d.ResourceType, d.PropertyDifferences)
+					patchDifferences(ctx, assumedCfg, d.PhysicalResourceId, d.ResourceType, d.PropertyDifferences)
 				}
 			}
 		}
@@ -76,12 +88,7 @@ func driftedStacks(ctx context.Context, cfn *cloudformation.Client, stackSetName
 	return nil
 }
 
-func patchDifferences(ctx context.Context, identifier, resourceType *string, differences []cftypes.PropertyDifference) {
-	cfg, err := config.LoadDefaultConfig(ctx)
-	if err != nil {
-		log.Fatalf("unable to load AWS SDK config, %v", err)
-	}
-
+func patchDifferences(ctx context.Context, cfg aws.Config, identifier, resourceType *string, differences []cftypes.PropertyDifference) {
 	ccc := cloudcontrol.NewFromConfig(cfg)
 
 	for _, d := range differences {
@@ -115,14 +122,14 @@ func patchDifferences(ctx context.Context, identifier, resourceType *string, dif
 type PatchOperation struct {
 	Op    string      `json:"op"`
 	Path  string      `json:"path"`
-	Value interface{} `json:"value"`
+	Value interface{} `json:"value,omitempty"`
 }
 
 func createRemovePatch(difference cftypes.PropertyDifference) string {
-	patchDoc := []map[string]interface{}{
+	patchDoc := []PatchOperation{
 		{
-			"op":   "remove",
-			"path": difference.PropertyPath,
+			Op:   "remove",
+			Path: aws.ToString(difference.PropertyPath),
 		},
 	}
 	patchBytes, _ := json.MarshalIndent(patchDoc, "", "  ")
@@ -135,11 +142,11 @@ func createAddPatch(difference cftypes.PropertyDifference) string {
 		panic(err)
 	}
 
-	patchDoc := []map[string]interface{}{
+	patchDoc := []PatchOperation{
 		{
-			"op":    "add",
-			"path":  difference.PropertyPath,
-			"value": expectedValue,
+			Op:    "add",
+			Path:  aws.ToString(difference.PropertyPath),
+			Value: expectedValue,
 		},
 	}
 	patchBytes, _ := json.MarshalIndent(patchDoc, "", "  ")
@@ -152,11 +159,11 @@ func createReplacePatch(difference cftypes.PropertyDifference) string {
 		expectedValue = difference.ExpectedValue
 	}
 
-	patchDoc := []map[string]interface{}{
+	patchDoc := []PatchOperation{
 		{
-			"op":    "replace",
-			"path":  difference.PropertyPath,
-			"value": expectedValue,
+			Op:    "replace",
+			Path:  aws.ToString(difference.PropertyPath),
+			Value: expectedValue,
 		},
 	}
 	patchBytes, _ := json.MarshalIndent(patchDoc, "", "  ")
