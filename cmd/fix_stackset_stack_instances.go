@@ -70,6 +70,9 @@ func parseFailedStackSetInstances(ctx context.Context, stackSetName string, role
 	data := []byte(template)
 	templateName, _ := randomFilename(32)
 	templateUrl, err := uploadS3File(ctx, cfg, bucketName, templateName, data)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	var nextToken *string
 	for {
@@ -101,6 +104,9 @@ func parseFailedStackSetInstances(ctx context.Context, stackSetName string, role
 				importData := []byte(importTemplate)
 				importTemplateName, _ := randomFilename(32)
 				importTemplateUrl, err := uploadS3File(ctx, cfg, bucketName, importTemplateName, importData)
+				if err != nil {
+					log.Fatal(err)
+				}
 
 				stackName := extractStackName(*instance.StackId)
 				stackId, err := importStack(ctx, assumedCfn, stackName, "ImportChangeSet", importTemplateUrl, resourcesToImport)
