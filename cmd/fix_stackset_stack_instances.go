@@ -1,14 +1,18 @@
 package cmd
 
 import (
+	"bytes"
 	"cfimporter/internal/template_parser"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
 	cftypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/spf13/cobra"
 	"log"
@@ -19,6 +23,7 @@ import (
 type FixStackSetOptions struct {
 	StackSetName string
 	RoleName     string
+	S3Bucket     string
 }
 
 var fixStackSetOptions = &FixStackSetOptions{}
@@ -36,6 +41,7 @@ func init() {
 
 	fixStackSetCmd.Flags().StringVar(&fixStackSetOptions.StackSetName, "stack-set-name", "", "StackSet Name")
 	fixStackSetCmd.Flags().StringVar(&fixStackSetOptions.RoleName, "role-name", "", "Role name to assume into each account")
+	fixStackSetCmd.Flags().StringVar(&fixStackSetOptions.S3Bucket, "s3-bucket", "", "Bucket to place templates")
 }
 
 func fixStackSet(ctx context.Context) {
@@ -44,10 +50,10 @@ func fixStackSet(ctx context.Context) {
 		return
 	}
 
-	parseFailedStackSetInstances(ctx, fixStackSetOptions.StackSetName, fixStackSetOptions.RoleName)
+	parseFailedStackSetInstances(ctx, fixStackSetOptions.StackSetName, fixStackSetOptions.RoleName, fixStackSetOptions.S3Bucket)
 }
 
-func parseFailedStackSetInstances(ctx context.Context, stackSetName string, roleName string) {
+func parseFailedStackSetInstances(ctx context.Context, stackSetName string, roleName string, bucketName string) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		log.Fatalf("unable to load AWS SDK config, %v", err)
@@ -60,6 +66,10 @@ func parseFailedStackSetInstances(ctx context.Context, stackSetName string, role
 		log.Fatalf("unable to get stack set template, %v", err)
 		return
 	}
+
+	data := []byte(template)
+	templateName, _ := randomFilename(32)
+	templateUrl, err := uploadS3File(ctx, cfg, bucketName, templateName, data)
 
 	var nextToken *string
 	for {
@@ -79,8 +89,6 @@ func parseFailedStackSetInstances(ctx context.Context, stackSetName string, role
 				}
 				assumedCfn := cloudformation.NewFromConfig(assumedCfg)
 
-				data := []byte(template)
-
 				cfi := &template_parser.CFImport{
 					Config: &assumedCfg,
 				}
@@ -90,8 +98,12 @@ func parseFailedStackSetInstances(ctx context.Context, stackSetName string, role
 					log.Fatal(err)
 				}
 
+				importData := []byte(importTemplate)
+				importTemplateName, _ := randomFilename(32)
+				importTemplateUrl, err := uploadS3File(ctx, cfg, bucketName, importTemplateName, importData)
+
 				stackName := extractStackName(*instance.StackId)
-				stackId, err := importStack(ctx, assumedCfn, stackName, "ImportChangeSet", string(importTemplate), resourcesToImport)
+				stackId, err := importStack(ctx, assumedCfn, stackName, "ImportChangeSet", importTemplateUrl, resourcesToImport)
 				if err != nil {
 					log.Fatal(err)
 				}
@@ -101,7 +113,7 @@ func parseFailedStackSetInstances(ctx context.Context, stackSetName string, role
 					log.Fatal(err)
 				}
 
-				err = updateStack(ctx, assumedCfn, stackName, template)
+				err = updateStack(ctx, assumedCfn, stackName, templateUrl)
 				if err != nil {
 					log.Fatal(err)
 				}
@@ -115,13 +127,6 @@ func parseFailedStackSetInstances(ctx context.Context, stackSetName string, role
 				if err != nil {
 					log.Fatal(err)
 				}
-
-				/*
-					err = updateStackSet(ctx, cfn, stackSetName, aws.ToString(instance.Account), aws.ToString(instance.Region))
-					if err != nil {
-						log.Fatal(err)
-					}
-				*/
 
 				fmt.Println("Stack instance successfully imported")
 			}
@@ -149,10 +154,10 @@ func getStackSetTemplate(ctx context.Context, cfn *cloudformation.Client, stackS
 	return "", errors.New("stack set not found")
 }
 
-func updateStack(ctx context.Context, cfn *cloudformation.Client, stackName, templateBody string) error {
+func updateStack(ctx context.Context, cfn *cloudformation.Client, stackName, templateUrl string) error {
 	input := &cloudformation.UpdateStackInput{
-		StackName:    aws.String(stackName),
-		TemplateBody: aws.String(string(templateBody)),
+		StackName:   aws.String(stackName),
+		TemplateURL: aws.String(templateUrl),
 		Capabilities: []cftypes.Capability{
 			cftypes.CapabilityCapabilityNamedIam,
 		},
@@ -171,7 +176,7 @@ func updateStack(ctx context.Context, cfn *cloudformation.Client, stackName, tem
 	return err
 }
 
-func importStack(ctx context.Context, cfn *cloudformation.Client, stackName, changeSetName, templateBody string, resourcesToImport []cftypes.ResourceToImport) (*string, error) {
+func importStack(ctx context.Context, cfn *cloudformation.Client, stackName, changeSetName, templateUrl string, resourcesToImport []cftypes.ResourceToImport) (*string, error) {
 	input := &cloudformation.CreateChangeSetInput{
 		ChangeSetName: aws.String(changeSetName),
 		StackName:     aws.String(stackName),
@@ -179,7 +184,7 @@ func importStack(ctx context.Context, cfn *cloudformation.Client, stackName, cha
 			cftypes.CapabilityCapabilityNamedIam,
 		},
 		ChangeSetType:     cftypes.ChangeSetTypeImport,
-		TemplateBody:      aws.String(templateBody),
+		TemplateURL:       aws.String(templateUrl),
 		ResourcesToImport: resourcesToImport,
 	}
 	output, err := cfn.CreateChangeSet(ctx, input)
@@ -311,4 +316,29 @@ func assumeRole(ctx context.Context, baseCfg aws.Config, region, accountID, role
 	)
 
 	return assumedCfg, nil
+}
+
+func uploadS3File(ctx context.Context, cfg aws.Config, bucket, key string, data []byte) (string, error) {
+	client := s3.NewFromConfig(cfg)
+
+	_, err := client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: &bucket,
+		Key:    &key,
+		Body:   bytes.NewReader(data),
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to upload data to S3: %w", err)
+	}
+
+	region := cfg.Region
+	url := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", bucket, region, key)
+	return url, nil
+}
+
+func randomFilename(nBytes int) (string, error) {
+	b := make([]byte, nBytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("failed to generate random filename: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
