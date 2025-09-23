@@ -244,26 +244,37 @@ func deleteStackInstanceFromStackSet(ctx context.Context, cfn *cloudformation.Cl
 		StackSetName: aws.String(stackSetName),
 	}
 
-	_, err := cfn.DeleteStackInstances(ctx, input)
-	return err
-}
-
-/*
-func updateStackSet(ctx context.Context, cfn *cloudformation.Client, stackSetName, account, region string) error {
-	accounts := []string{account}
-	regions := []string{region}
-
-	_, err := cfn.UpdateStackInstances(ctx, &cloudformation.UpdateStackInstancesInput{
-		StackSetName: aws.String(stackSetName),
-		Accounts:     accounts,
-		Regions:      regions,
-	})
+	output, err := cfn.DeleteStackInstances(ctx, input)
 	if err != nil {
 		return err
 	}
+
+	operationID := *output.OperationId
+
+	for {
+		op, err := cfn.DescribeStackSetOperation(ctx, &cloudformation.DescribeStackSetOperationInput{
+			StackSetName: aws.String(stackSetName),
+			OperationId:  aws.String(operationID),
+		})
+		if err != nil {
+			return err
+		}
+
+		status := string(op.StackSetOperation.Status)
+		if status == string(cftypes.StackSetOperationStatusSucceeded) {
+			break
+		}
+
+		if status == string(cftypes.StackSetOperationStatusFailed) ||
+			status == string(cftypes.StackSetOperationStatusStopped) {
+			return fmt.Errorf("Deletion failed with status: %s", status)
+		}
+
+		time.Sleep(10 * time.Second)
+	}
+
 	return nil
 }
-*/
 
 func extractStackName(arn string) string {
 	parts := strings.Split(arn, "/")
