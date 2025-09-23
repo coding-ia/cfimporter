@@ -63,7 +63,7 @@ func parseFailedStackSetInstances(ctx context.Context, stackSetName string, role
 
 	var nextToken *string
 	for {
-		out, err := cfn.ListStackInstances(ctx, &cloudformation.ListStackInstancesInput{
+		instances, err := cfn.ListStackInstances(ctx, &cloudformation.ListStackInstancesInput{
 			StackSetName: aws.String(stackSetName),
 			NextToken:    nextToken,
 		})
@@ -71,7 +71,7 @@ func parseFailedStackSetInstances(ctx context.Context, stackSetName string, role
 			log.Fatalf("failed to list stack instances: %v", err)
 		}
 
-		for _, instance := range out.Summaries {
+		for _, instance := range instances.Summaries {
 			if instance.StackInstanceStatus.DetailedStatus == cftypes.StackInstanceDetailedStatusFailed {
 				assumedCfg, err := assumeRole(ctx, cfg, aws.ToString(instance.Region), aws.ToString(instance.Account), roleName)
 				if err != nil {
@@ -91,7 +91,7 @@ func parseFailedStackSetInstances(ctx context.Context, stackSetName string, role
 				}
 
 				stackName := extractStackName(*instance.StackId)
-				err = importStack(ctx, assumedCfn, stackName, "ImportChangeSet", string(importTemplate), resourcesToImport)
+				stackId, err := importStack(ctx, assumedCfn, stackName, "ImportChangeSet", string(importTemplate), resourcesToImport)
 				if err != nil {
 					log.Fatal(err)
 				}
@@ -101,19 +101,36 @@ func parseFailedStackSetInstances(ctx context.Context, stackSetName string, role
 					log.Fatal(err)
 				}
 
-				err = updateStackSet(ctx, cfn, stackSetName, aws.ToString(instance.Account), aws.ToString(instance.Region))
+				err = updateStack(ctx, assumedCfn, stackName, template)
 				if err != nil {
 					log.Fatal(err)
 				}
+
+				err = deleteStackInstanceFromStackSet(ctx, cfn, stackSetName, aws.ToString(instance.Account), aws.ToString(instance.Region))
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				err = importStackToStackSet(ctx, cfn, stackSetName, aws.ToString(stackId))
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				/*
+					err = updateStackSet(ctx, cfn, stackSetName, aws.ToString(instance.Account), aws.ToString(instance.Region))
+					if err != nil {
+						log.Fatal(err)
+					}
+				*/
 
 				fmt.Println("Stack instance successfully imported")
 			}
 		}
 
-		if out.NextToken == nil {
+		if instances.NextToken == nil {
 			break
 		}
-		nextToken = out.NextToken
+		nextToken = instances.NextToken
 	}
 }
 
@@ -132,10 +149,32 @@ func getStackSetTemplate(ctx context.Context, cfn *cloudformation.Client, stackS
 	return "", errors.New("stack set not found")
 }
 
-func importStack(ctx context.Context, cfn *cloudformation.Client, stackSetName, changeSetName, templateBody string, resourcesToImport []cftypes.ResourceToImport) error {
+func updateStack(ctx context.Context, cfn *cloudformation.Client, stackName, templateBody string) error {
+	input := &cloudformation.UpdateStackInput{
+		StackName:    aws.String(stackName),
+		TemplateBody: aws.String(string(templateBody)),
+		Capabilities: []cftypes.Capability{
+			cftypes.CapabilityCapabilityNamedIam,
+		},
+		DisableRollback: aws.Bool(true),
+	}
+	_, err := cfn.UpdateStack(ctx, input)
+	if err != nil {
+		return err
+	}
+
+	waiter := cloudformation.NewStackUpdateCompleteWaiter(cfn)
+
+	err = waiter.Wait(ctx, &cloudformation.DescribeStacksInput{
+		StackName: aws.String(stackName),
+	}, 30*time.Minute) // max wait time
+	return err
+}
+
+func importStack(ctx context.Context, cfn *cloudformation.Client, stackName, changeSetName, templateBody string, resourcesToImport []cftypes.ResourceToImport) (*string, error) {
 	input := &cloudformation.CreateChangeSetInput{
 		ChangeSetName: aws.String(changeSetName),
-		StackName:     aws.String(stackSetName),
+		StackName:     aws.String(stackName),
 		Capabilities: []cftypes.Capability{
 			cftypes.CapabilityCapabilityNamedIam,
 		},
@@ -143,9 +182,9 @@ func importStack(ctx context.Context, cfn *cloudformation.Client, stackSetName, 
 		TemplateBody:      aws.String(templateBody),
 		ResourcesToImport: resourcesToImport,
 	}
-	_, err := cfn.CreateChangeSet(ctx, input)
+	output, err := cfn.CreateChangeSet(ctx, input)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	waiter := cloudformation.NewChangeSetCreateCompleteWaiter(cfn)
@@ -153,26 +192,52 @@ func importStack(ctx context.Context, cfn *cloudformation.Client, stackSetName, 
 	err = waiter.Wait(
 		ctx,
 		&cloudformation.DescribeChangeSetInput{
-			StackName:     aws.String(stackSetName),
+			StackName:     aws.String(stackName),
 			ChangeSetName: aws.String(changeSetName),
 		},
 		5*time.Minute, // max wait time
 	)
 	if err != nil {
-		return err
+		return output.StackId, err
 	}
 
 	_, err = cfn.ExecuteChangeSet(ctx, &cloudformation.ExecuteChangeSetInput{
-		StackName:     aws.String(stackSetName),
+		StackName:     aws.String(stackName),
 		ChangeSetName: aws.String(changeSetName),
 	})
 	if err != nil {
-		return err
+		return output.StackId, err
 	}
 
-	return nil
+	return output.StackId, nil
 }
 
+func importStackToStackSet(ctx context.Context, cfn *cloudformation.Client, stackSetName, stackId string) error {
+	stackIds := []string{stackId}
+	input := &cloudformation.ImportStacksToStackSetInput{
+		StackSetName: aws.String(stackSetName),
+		StackIds:     stackIds,
+	}
+
+	_, err := cfn.ImportStacksToStackSet(ctx, input)
+	return err
+}
+
+func deleteStackInstanceFromStackSet(ctx context.Context, cfn *cloudformation.Client, stackSetName, accountId, region string) error {
+	accounts := []string{accountId}
+	regions := []string{region}
+	input := &cloudformation.DeleteStackInstancesInput{
+		Regions:      regions,
+		RetainStacks: aws.Bool(false),
+		Accounts:     accounts,
+		StackSetName: aws.String(stackSetName),
+	}
+
+	_, err := cfn.DeleteStackInstances(ctx, input)
+	return err
+}
+
+/*
 func updateStackSet(ctx context.Context, cfn *cloudformation.Client, stackSetName, account, region string) error {
 	accounts := []string{account}
 	regions := []string{region}
@@ -187,6 +252,7 @@ func updateStackSet(ctx context.Context, cfn *cloudformation.Client, stackSetNam
 	}
 	return nil
 }
+*/
 
 func extractStackName(arn string) string {
 	parts := strings.Split(arn, "/")
