@@ -61,13 +61,13 @@ func parseFailedStackSetInstances(ctx context.Context, stackSetName string, role
 
 	cfn := cloudformation.NewFromConfig(cfg)
 
-	template, err := getStackSetTemplate(ctx, cfn, stackSetName)
+	stackSetDetails, err := getStackSetDetails(ctx, cfn, stackSetName)
 	if err != nil {
 		log.Fatalf("unable to get stack set template, %v", err)
 		return
 	}
 
-	data := []byte(template)
+	data := []byte(stackSetDetails.TemplateBody)
 	templateName, _ := randomFilename(32)
 	templateUrl, err := uploadS3File(ctx, cfg, bucketName, templateName, data)
 	if err != nil {
@@ -108,27 +108,32 @@ func parseFailedStackSetInstances(ctx context.Context, stackSetName string, role
 					log.Fatal(err)
 				}
 
+				log.Println("Importing Stack from StackSet template...")
 				stackName := extractStackName(*instance.StackId)
 				stackId, err := importStack(ctx, assumedCfn, stackName, "ImportChangeSet", importTemplateUrl, resourcesToImport)
 				if err != nil {
 					log.Fatal(err)
 				}
 
+				log.Println("Waiting for import to finish...")
 				err = waitForImport(ctx, assumedCfn, stackName)
 				if err != nil {
 					log.Fatal(err)
 				}
 
-				err = updateStack(ctx, assumedCfn, stackName, templateUrl)
+				log.Println("Updating the Stack...")
+				err = updateStack(ctx, assumedCfn, stackName, templateUrl, stackSetDetails.Tags)
 				if err != nil {
 					log.Fatal(err)
 				}
 
+				log.Println("Deleting Stack from StackSet instances...")
 				err = deleteStackInstanceFromStackSet(ctx, cfn, stackSetName, aws.ToString(instance.Account), aws.ToString(instance.Region))
 				if err != nil {
 					log.Fatal(err)
 				}
 
+				log.Println("Importing the Stack to the StackSet instances...")
 				err = importStackToStackSet(ctx, cfn, stackSetName, aws.ToString(stackId))
 				if err != nil {
 					log.Fatal(err)
@@ -145,25 +150,34 @@ func parseFailedStackSetInstances(ctx context.Context, stackSetName string, role
 	}
 }
 
-func getStackSetTemplate(ctx context.Context, cfn *cloudformation.Client, stackSetName string) (string, error) {
+type StackSetDetails struct {
+	TemplateBody string
+	Tags         []cftypes.Tag
+}
+
+func getStackSetDetails(ctx context.Context, cfn *cloudformation.Client, stackSetName string) (*StackSetDetails, error) {
 	out, err := cfn.DescribeStackSet(ctx, &cloudformation.DescribeStackSetInput{
 		StackSetName: aws.String(stackSetName),
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	if out != nil {
-		return *out.StackSet.TemplateBody, nil
+		return &StackSetDetails{
+			TemplateBody: *out.StackSet.TemplateBody,
+			Tags:         out.StackSet.Tags,
+		}, nil
 	}
 
-	return "", errors.New("stack set not found")
+	return nil, errors.New("stack set not found")
 }
 
-func updateStack(ctx context.Context, cfn *cloudformation.Client, stackName, templateUrl string) error {
+func updateStack(ctx context.Context, cfn *cloudformation.Client, stackName, templateUrl string, tags []cftypes.Tag) error {
 	input := &cloudformation.UpdateStackInput{
 		StackName:   aws.String(stackName),
 		TemplateURL: aws.String(templateUrl),
+		Tags:        tags,
 		Capabilities: []cftypes.Capability{
 			cftypes.CapabilityCapabilityNamedIam,
 		},
