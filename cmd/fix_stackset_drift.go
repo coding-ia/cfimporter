@@ -118,6 +118,9 @@ func patchDifferences(ctx context.Context, cfg aws.Config, identifier, resourceT
 			log.Printf("failed to update resource: %v", err)
 			continue
 		}
+
+		log.Printf("CloudControl request: %s", aws.ToString(out.ProgressEvent.RequestToken))
+
 		err = waitForRequest(ctx, ccc, aws.ToString(out.ProgressEvent.RequestToken))
 		if err != nil {
 			log.Printf("failed to update resource: %v", err)
@@ -192,7 +195,7 @@ func waitForRequest(ctx context.Context, client *cloudcontrol.Client, token stri
 		case "SUCCESS":
 			return nil
 		case "FAILED", "CANCEL_COMPLETE", "CANCEL_IN_PROGRESS":
-			return fmt.Errorf("operation failed: %v", out.ProgressEvent.StatusMessage)
+			return fmt.Errorf("operation failed: %v", aws.ToString(out.ProgressEvent.StatusMessage))
 		}
 
 		time.Sleep(5 * time.Second)
