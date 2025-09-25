@@ -116,6 +116,7 @@ func patchDifferences(ctx context.Context, cfg aws.Config, identifier, resourceT
 		out, err := ccc.UpdateResource(ctx, input)
 		if err != nil {
 			log.Printf("failed to update resource: %v", err)
+			log.Printf("patch document: %s", patchDocument)
 			continue
 		}
 
@@ -124,7 +125,6 @@ func patchDifferences(ctx context.Context, cfg aws.Config, identifier, resourceT
 		err = waitForRequest(ctx, ccc, aws.ToString(out.ProgressEvent.RequestToken))
 		if err != nil {
 			log.Printf("failed to update resource: %v", err)
-			log.Printf("patch document: %s", patchDocument)
 		}
 	}
 }
