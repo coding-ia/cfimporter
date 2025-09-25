@@ -72,8 +72,9 @@ func driftedStacks(ctx context.Context, cfg aws.Config, cfn *cloudformation.Clie
 				log.Printf("failed to assume role: %v", err)
 				continue
 			}
+			assumedCfn := cloudformation.NewFromConfig(assumedCfg)
 
-			drifts, err := cfn.DescribeStackResourceDrifts(ctx, &cloudformation.DescribeStackResourceDriftsInput{
+			drifts, err := assumedCfn.DescribeStackResourceDrifts(ctx, &cloudformation.DescribeStackResourceDriftsInput{
 				StackName: instance.StackId,
 			})
 			if err != nil {
