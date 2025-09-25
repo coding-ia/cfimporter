@@ -84,6 +84,7 @@ func driftedStacks(ctx context.Context, cfg aws.Config, cfn *cloudformation.Clie
 
 			for _, d := range drifts.StackResourceDrifts {
 				if d.StackResourceDriftStatus != cftypes.StackResourceDriftStatusInSync {
+					log.Printf("Patching drifted resource: %s", aws.ToString(d.PhysicalResourceId))
 					patchDifferences(ctx, assumedCfg, d.PhysicalResourceId, d.ResourceType, d.PropertyDifferences)
 				}
 			}
