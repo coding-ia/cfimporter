@@ -65,9 +65,12 @@ func driftedStacks(ctx context.Context, cfg aws.Config, cfn *cloudformation.Clie
 
 	for _, instance := range instances.Summaries {
 		if instance.DriftStatus == cftypes.StackDriftStatusDrifted {
+			log.Printf("Attempting to fix StackSet drift in account %s", instance.Account)
+
 			assumedCfg, err := assumeRole(ctx, cfg, aws.ToString(instance.Region), aws.ToString(instance.Account), roleName)
 			if err != nil {
-				log.Fatal(err)
+				log.Printf("failed to assume role: %v", err)
+				continue
 			}
 
 			drifts, err := cfn.DescribeStackResourceDrifts(ctx, &cloudformation.DescribeStackResourceDriftsInput{
