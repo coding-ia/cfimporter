@@ -100,13 +100,19 @@ func patchDifferences(ctx context.Context, cfg aws.Config, identifier, resourceT
 	for _, d := range differences {
 		var patchDocument string
 
+		var err error
 		switch d.DifferenceType {
 		case cftypes.DifferenceTypeNotEqual:
 			patchDocument = createReplacePatch(d)
 		case cftypes.DifferenceTypeAdd:
 			patchDocument = createRemovePatch(d)
 		case cftypes.DifferenceTypeRemove:
-			patchDocument = createAddPatch(d)
+			patchDocument, err = createAddPatch(d)
+		}
+
+		if err != nil {
+			log.Printf("failed to patch differences: %v", err)
+			continue
 		}
 
 		input := &cloudcontrol.UpdateResourceInput{
@@ -147,10 +153,11 @@ func createRemovePatch(difference cftypes.PropertyDifference) string {
 	return string(patchBytes)
 }
 
-func createAddPatch(difference cftypes.PropertyDifference) string {
+func createAddPatch(difference cftypes.PropertyDifference) (string, error) {
 	var expectedValue interface{}
 	if err := json.Unmarshal([]byte(aws.ToString(difference.ExpectedValue)), &expectedValue); err != nil {
-		panic(err)
+		log.Printf("expected value: %s", aws.ToString(difference.ExpectedValue))
+		return "", err
 	}
 
 	patchDoc := []PatchOperation{
@@ -161,7 +168,7 @@ func createAddPatch(difference cftypes.PropertyDifference) string {
 		},
 	}
 	patchBytes, _ := json.MarshalIndent(patchDoc, "", "  ")
-	return string(patchBytes)
+	return string(patchBytes), nil
 }
 
 func createReplacePatch(difference cftypes.PropertyDifference) string {
