@@ -156,8 +156,6 @@ func createRemovePatch(difference cftypes.PropertyDifference) string {
 func createAddPatch(difference cftypes.PropertyDifference) (string, error) {
 	var expectedValue interface{}
 	if err := json.Unmarshal([]byte(aws.ToString(difference.ExpectedValue)), &expectedValue); err != nil {
-		//log.Printf("expected value: %s", aws.ToString(difference.ExpectedValue))
-		//return "", err
 		expectedValue = aws.ToString(difference.ExpectedValue)
 	}
 
